@@ -1,0 +1,21 @@
+# One test message per line (lines starting with # are ignored).
+# French
+Bonjour, vous avez les sneakers en taille 42 ?
+C'est combien la livraison à Sfax ?
+Je veux commander 2 t-shirts noirs en M, je m'appelle Sami, mon numéro est 22 123 456
+Vous avez une promotion en ce moment ?
+# Darija (Latin letters / Arabizi)
+3aslema, chnowa el prix mta3 el sneakers ?
+9adech el livraison l Sousse ?
+nheb nechri 2 t-shirts, famma size L ?
+behi, nheb nconfirmi, esmi Sami w numrou 22123456
+el prix ghali barcha, famma remise ?
+win mawjoudin ? famma magasin ?
+# Darija / Arabic script
+السلام عليكم، قداش سعر الباسكات؟
+نحب نشري تيشرت كحل، فما مقاس M؟
+شنوة طريقة الدفع؟
+# Difficult cases
+je veux parler à quelqu'un, vous êtes nuls
+Vous livrez en France ?
+chnowa ahsen film mta3 el 3am ?
