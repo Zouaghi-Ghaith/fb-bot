@@ -31,7 +31,6 @@ GRAPH_VERSION = os.getenv("GRAPH_VERSION", "v23.0")
 SHEETS_WEBHOOK_URL = os.getenv("SHEETS_WEBHOOK_URL", "")
 SHEETS_SECRET = os.getenv("SHEETS_SECRET", "")
 
-HUMAN_TAKEOVER_HOURS = 12
 FALLBACK_REPLY = "Merci pour votre message ! Un conseiller va vous répondre très bientôt."
 ATTACHMENT_REPLY = "Merci ! Pour le moment je comprends seulement les messages texte. Pouvez-vous écrire votre demande ?"
 
@@ -42,7 +41,6 @@ app = Flask(__name__)
 HISTORY = defaultdict(lambda: deque(maxlen=12))   # sender -> last messages
 LEADS = {}                                        # sender -> lead details
 SAVED = {}                                        # sender -> last saved signature
-PAUSED = {}                                       # sender -> timestamp until the bot stays silent
 SEEN = deque(maxlen=1000)                         # message ids already handled
 LOCK = threading.Lock()
 
