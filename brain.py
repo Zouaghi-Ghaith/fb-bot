@@ -341,34 +341,4 @@ def merge_lead(known, new):
         if key == "ready_to_buy" and str(value).lower() == "unknown":
             continue
         result[key] = value
-    return resultor "")):
-                data = retry
-        except Exception:
-            pass   # keep the first answer if the retry fails
-
-    lead = data.get("lead") or {}
-    clean = {key: lead.get(key) for key in LEAD_KEYS}
-    if clean.get("phone"):
-        clean["phone"] = normalize_phone(clean["phone"])
-    for key in ("name", "address", "need", "details"):
-        if clean.get(key) is not None and not isinstance(clean[key], str):
-            clean[key] = json.dumps(clean[key], ensure_ascii=False)   # never lose an address given as a list/dict
-
-    return {
-        "reply": str(data.get("reply") or "").strip(),
-        "language": data.get("language") or "",
-        "lead": clean,
-        "handoff": bool(data.get("handoff")),
-    }
-
-
-def merge_lead(known, new):
-    """Keep existing lead data unless new non-empty information is provided."""
-    result = dict(known or {})
-    for key, value in (new or {}).items():
-        if value in (None, "", "null"):
-            continue
-        if key == "ready_to_buy" and str(value).lower() == "unknown":
-            continue
-        result[key] = value
     return result
