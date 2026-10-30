@@ -204,7 +204,7 @@ def _call_openai_compatible(provider, base_url, key, model,
     # This function is also used by Mistral, so apply Groq's
     # max_completion_tokens parameter only to Groq requests.
     if provider.lower() == "groq":
-        request_body["max_completion_tokens"] = 500
+        request_body["max_completion_tokens"] = 350
 
     result = _post_json(
         base_url,
@@ -293,7 +293,20 @@ def _run(history, user_text, known_lead, correction=""):
     candidates = [p for p in order if _COOLDOWN.get(p, 0) <= now] or order
     errors = []
     for provider in candidates:
-        prompt = build_prompt(known_lead, compact=_use_compact(provider)) + correction
+        if provider == "groq":
+            # Keep Groq's input small: its free tier has a strict tokens-per-minute limit.
+            prompt = SYSTEM_PROMPT.format(
+                business=BUSINESS_INFO.strip(),
+                language_rules=LANGUAGE_RULES,
+                clarity_rules=CLARITY_RULES,
+                address_rules=ADDRESS_RULES,
+                phone_rules=PHONE_RULES,
+                vocab="",
+                examples="",
+                known=json.dumps(known_lead or {}, ensure_ascii=False),
+            ) + correction
+        else:
+            prompt = build_prompt(known_lead, compact=_use_compact(provider)) + correction
         try:
             data = _extract_json(_generate(provider, prompt, history, user_text))
             return data, provider
@@ -308,11 +321,13 @@ def _run(history, user_text, known_lead, correction=""):
 
 def ask_ai(history, user_text, known_lead=None):
     """Return reply, language, lead, handoff (and which provider answered)."""
+    # Only send the last two exchanges. Full lead data is supplied separately in the prompt.
+    history = (history or [])[-4:]
     data, provider = _run(history, user_text, known_lead)
 
     # Safety net: if the reply contains Moroccan/Algerian/other words, ask once for a Tunisian rewrite.
     bad = find_forbidden(str(data.get("reply") or ""))
-    if bad:
+    if bad and provider != "groq":
         fix = ("\n\nIMPORTANT CORRECTION: your previous answer used non-Tunisian words ("
                + ", ".join(bad) + "). Write the answer again using ONLY Tunisian Darija or French words, "
                "with the same meaning and the same JSON format.")
