@@ -8,8 +8,10 @@ v2: Tunisian Darija + French only (non-Tunisian words are blocked and retried),
 """
 
 import json
+import logging
 import os
 import re
+import time
 
 import requests
 
@@ -65,8 +67,7 @@ Return ONLY a valid JSON object with exactly these keys:
 LEAD_KEYS = ("name", "phone", "address", "need", "details", "ready_to_buy")
 
 
-def build_prompt(known_lead):
-    compact = os.getenv("BRAIN_SIZE", "full").strip().lower() == "compact"
+def build_prompt(known_lead, compact=False):
     return SYSTEM_PROMPT.format(
         business=BUSINESS_INFO.strip(),
         language_rules=LANGUAGE_RULES,
@@ -233,8 +234,39 @@ def _call_groq(system_prompt, history, user_text):
     )
 
 
-def _generate(prompt, history, user_text):
-    provider = os.getenv("AI_PROVIDER", "gemini").strip().lower()
+PROVIDERS = ("gemini", "mistral", "groq")
+_COOLDOWN = {}          # provider -> time until it is skipped (after a rate-limit error)
+log = logging.getLogger("bot")
+
+
+def _has_key(provider):
+    return bool(os.getenv(f"{provider.upper()}_API_KEY"))
+
+
+def _provider_order():
+    """AI_PROVIDER first, then backups. AI_FALLBACKS=auto (default) = every other provider that has a key;
+    AI_FALLBACKS=none = no backup; AI_FALLBACKS=gemini,mistral = your own list."""
+    first = os.getenv("AI_PROVIDER", "gemini").strip().lower()
+    setting = os.getenv("AI_FALLBACKS", "auto").strip().lower()
+    if setting in ("none", "off", "no", ""):
+        return [first]
+    if setting == "auto":
+        others = [p for p in PROVIDERS if p != first and _has_key(p)]
+    else:
+        others = [p.strip() for p in setting.split(",") if p.strip() and p.strip() != first]
+    return [first] + others
+
+
+def _use_compact(provider):
+    """BRAIN_SIZE=full|compact forces a size. Default (auto): Groq gets the compact prompt because its
+    free tier allows only about 8000 tokens per minute."""
+    size = os.getenv("BRAIN_SIZE", "auto").strip().lower()
+    if size in ("full", "compact"):
+        return size == "compact"
+    return provider == "groq"
+
+
+def _generate(provider, prompt, history, user_text):
     if provider == "groq":
         return _call_groq(prompt, history, user_text)
     if provider == "mistral":
@@ -246,20 +278,70 @@ def _generate(prompt, history, user_text):
     )
 
 
+def _run(history, user_text, known_lead, correction=""):
+    """Try the providers in order; a provider that is rate-limited is skipped for 60 seconds."""
+    order = _provider_order()
+    now = time.time()
+    candidates = [p for p in order if _COOLDOWN.get(p, 0) <= now] or order
+    errors = []
+    for provider in candidates:
+        prompt = build_prompt(known_lead, compact=_use_compact(provider)) + correction
+        try:
+            data = _extract_json(_generate(provider, prompt, history, user_text))
+            return data, provider
+        except Exception as e:
+            msg = str(e)
+            errors.append(f"{provider}: {msg[:300]}")
+            log.warning("AI provider %s failed: %s", provider, msg[:300])
+            if "HTTP 429" in msg or "HTTP 413" in msg:
+                _COOLDOWN[provider] = time.time() + 60
+    raise RuntimeError("All AI providers failed -> " + " | ".join(errors))
+
+
 def ask_ai(history, user_text, known_lead=None):
-    """Return reply, language, lead and handoff."""
-    prompt = build_prompt(known_lead)
-    data = _extract_json(_generate(prompt, history, user_text))
+    """Return reply, language, lead, handoff (and which provider answered)."""
+    data, provider = _run(history, user_text, known_lead)
 
     # Safety net: if the reply contains Moroccan/Algerian/other words, ask once for a Tunisian rewrite.
     bad = find_forbidden(str(data.get("reply") or ""))
     if bad:
-        fix = (prompt + "\n\nIMPORTANT CORRECTION: your previous answer used non-Tunisian words ("
+        fix = ("\n\nIMPORTANT CORRECTION: your previous answer used non-Tunisian words ("
                + ", ".join(bad) + "). Write the answer again using ONLY Tunisian Darija or French words, "
                "with the same meaning and the same JSON format.")
         try:
-            retry = _extract_json(_generate(fix, history, user_text))
+            retry, retry_provider = _run(history, user_text, known_lead, correction=fix)
             if not find_forbidden(str(retry.get("reply") or "")):
+                data, provider = retry, retry_provider
+        except Exception:
+            pass   # keep the first answer if the retry fails
+
+    lead = data.get("lead") or {}
+    clean = {key: lead.get(key) for key in LEAD_KEYS}
+    if clean.get("phone"):
+        clean["phone"] = normalize_phone(clean["phone"])
+    for key in ("name", "address", "need", "details"):
+        if clean.get(key) is not None and not isinstance(clean[key], str):
+            clean[key] = json.dumps(clean[key], ensure_ascii=False)   # never lose an address given as a list/dict
+
+    return {
+        "reply": str(data.get("reply") or "").strip(),
+        "language": data.get("language") or "",
+        "lead": clean,
+        "handoff": bool(data.get("handoff")),
+        "provider": provider,
+    }
+
+
+def merge_lead(known, new):
+    """Keep existing lead data unless new non-empty information is provided."""
+    result = dict(known or {})
+    for key, value in (new or {}).items():
+        if value in (None, "", "null"):
+            continue
+        if key == "ready_to_buy" and str(value).lower() == "unknown":
+            continue
+        result[key] = value
+    return resultor "")):
                 data = retry
         except Exception:
             pass   # keep the first answer if the retry fails
