@@ -1,75 +1,59 @@
-
 """
 AI brain for a Facebook/Instagram business bot.
 Supports Gemini, Mistral, and Groq.
 Returns: reply, language, lead, handoff.
+
+v2: Tunisian Darija + French only (non-Tunisian words are blocked and retried),
+    big vocabulary (vocab.py), accepts any address / map location, cleans phone numbers.
 """
 
 import json
 import os
 import re
+
 import requests
 
 from business import BUSINESS_INFO
+from vocab import (
+    ADDRESS_RULES, CLARITY_RULES, LANGUAGE_RULES, PHONE_RULES,
+    EXAMPLES_COMPACT, STYLE_EXAMPLES, TUNISIAN_VOCAB, VOCAB_COMPACT, find_forbidden, normalize_phone,
+)
 
-DARIJA_GLOSSARY = """
-Tunisian Darija hints (Arabizi: 3=ع, 7=ح, 9=ق, 5=خ, 2=ء):
-- 3aslema / aslema / salem = hello
-- chnowa / chnouwa / شنوة = what
-- 9adech / 9addeh / قداش = how much
-- nheb / نحب = I want
-- nechri / نشري = I buy
-- famma / fama / فما = is there
-- mouch / mech / موش = not
-- taw / tawa / توا = now
-- ghodwa / غدوة = tomorrow
-- barcha / برشا = a lot
-- behi / باهي = good, ok
-- ghali / غالي = expensive
-- rkhis / رخيص = cheap
-- win / وين = where
-- wa9teh / وقتاش = when
-- kifech / كيفاش = how
-- yaatik essaha = thank you
-- flous / فلوس = money
-- esmi = my name is
-- numrou = phone number
-"""
-
-SYSTEM_PROMPT = """You are the assistant of a small business replying to Facebook/Instagram customers.
+SYSTEM_PROMPT = """You are the assistant of a small Tunisian business replying to its customers on Facebook and Instagram.
 
 BUSINESS INFORMATION (your ONLY source of facts):
 {business}
 
-LANGUAGE RULES
-- Reply in the customer's language and script: French, MSA Arabic, Tunisian Darija Arabic, Tunisian Darija Arabizi, or English.
-- For Arabizi, reply in simple Arabizi or French.
-- Be friendly, polite and concise: 1-3 sentences. Ask only ONE question at a time.
-{glossary}
-
+{language_rules}
+{clarity_rules}
 YOUR GOAL
-- Understand the customer's request.
-- Collect naturally: name, phone, product/service, details (size, color, quantity, area, date, budget), and purchase readiness.
+- Understand the customer's request and answer it clearly.
+- Collect naturally, step by step: name, phone, address, product/service, details (size, color, quantity, date, budget), and purchase readiness.
 - When enough order details are collected, summarize the order and say the team will confirm.
-
+{address_rules}
+{phone_rules}
 HARD RULES
 - Never invent prices, stock, addresses, delivery times, discounts, or promises.
-- If business information does not answer the question, say the team will confirm and set handoff to true.
+- If the business information does not answer the question, say the team will confirm and set handoff to true.
 - Never request card numbers, passwords, or verification codes.
 - Set handoff=true if the customer is angry, complains, requests a human, or asks something you cannot answer.
-- Stay focused on the business.
+- Stay focused on the business. Politely bring off-topic chats back to the business.
 - ready_to_buy is "yes" only if they clearly want to order/book now; "maybe" if interested; "no" if they decline; otherwise "unknown".
-- In lead, include only information the customer stated. Use null for unknown fields and retain known information unless corrected.
+- In lead, include only information the customer stated. Use null for unknown fields and keep known information unless the customer corrects it.
+
+{vocab}
+{examples}
 
 KNOWN CUSTOMER INFO: {known}
 
 Return ONLY a valid JSON object with exactly these keys:
 {{
   "reply": "message to customer",
-  "language": "fr" | "ar" | "darija_ar" | "darija_latin" | "en",
+  "language": "fr" | "darija_ar" | "darija_latin",
   "lead": {{
     "name": null,
     "phone": null,
+    "address": null,
     "need": null,
     "details": null,
     "ready_to_buy": "unknown"
@@ -78,10 +62,19 @@ Return ONLY a valid JSON object with exactly these keys:
 }}
 """
 
+LEAD_KEYS = ("name", "phone", "address", "need", "details", "ready_to_buy")
+
+
 def build_prompt(known_lead):
+    compact = os.getenv("BRAIN_SIZE", "full").strip().lower() == "compact"
     return SYSTEM_PROMPT.format(
         business=BUSINESS_INFO.strip(),
-        glossary=DARIJA_GLOSSARY,
+        language_rules=LANGUAGE_RULES,
+        clarity_rules=CLARITY_RULES,
+        address_rules=ADDRESS_RULES,
+        phone_rules=PHONE_RULES,
+        vocab=VOCAB_COMPACT if compact else TUNISIAN_VOCAB,
+        examples=EXAMPLES_COMPACT if compact else STYLE_EXAMPLES,
         known=json.dumps(known_lead or {}, ensure_ascii=False),
     )
 
@@ -96,6 +89,8 @@ def _extract_json(text):
         if match:
             return json.loads(match.group(0))
         raise RuntimeError("AI returned invalid JSON.")
+
+
 def save_lead(lead):
     url = os.getenv("SHEETS_WEBHOOK_URL", "").strip()
     secret = os.getenv("SHEETS_SECRET", "").strip()
@@ -110,6 +105,7 @@ def save_lead(lead):
         "sender_id": "TEST_CHAT",
         "name": lead.get("name"),
         "phone": lead.get("phone"),
+        "address": lead.get("address"),
         "need": lead.get("need"),
         "details": lead.get("details"),
         "ready_to_buy": lead.get("ready_to_buy", "unknown"),
@@ -237,34 +233,49 @@ def _call_groq(system_prompt, history, user_text):
     )
 
 
+def _generate(prompt, history, user_text):
+    provider = os.getenv("AI_PROVIDER", "gemini").strip().lower()
+    if provider == "groq":
+        return _call_groq(prompt, history, user_text)
+    if provider == "mistral":
+        return _call_mistral(prompt, history, user_text)
+    if provider == "gemini":
+        return _call_gemini(prompt, history, user_text)
+    raise RuntimeError(
+        f"Unsupported AI_PROVIDER '{provider}'. Use gemini, groq, or mistral."
+    )
+
+
 def ask_ai(history, user_text, known_lead=None):
     """Return reply, language, lead and handoff."""
     prompt = build_prompt(known_lead)
-    provider = os.getenv("AI_PROVIDER", "gemini").strip().lower()
+    data = _extract_json(_generate(prompt, history, user_text))
 
-    if provider == "groq":
-        raw = _call_groq(prompt, history, user_text)
-    elif provider == "mistral":
-        raw = _call_mistral(prompt, history, user_text)
-    elif provider == "gemini":
-        raw = _call_gemini(prompt, history, user_text)
-    else:
-        raise RuntimeError(
-            f"Unsupported AI_PROVIDER '{provider}'. Use gemini, groq, or mistral."
-        )
+    # Safety net: if the reply contains Moroccan/Algerian/other words, ask once for a Tunisian rewrite.
+    bad = find_forbidden(str(data.get("reply") or ""))
+    if bad:
+        fix = (prompt + "\n\nIMPORTANT CORRECTION: your previous answer used non-Tunisian words ("
+               + ", ".join(bad) + "). Write the answer again using ONLY Tunisian Darija or French words, "
+               "with the same meaning and the same JSON format.")
+        try:
+            retry = _extract_json(_generate(fix, history, user_text))
+            if not find_forbidden(str(retry.get("reply") or "")):
+                data = retry
+        except Exception:
+            pass   # keep the first answer if the retry fails
 
-    data = _extract_json(raw)
     lead = data.get("lead") or {}
+    clean = {key: lead.get(key) for key in LEAD_KEYS}
+    if clean.get("phone"):
+        clean["phone"] = normalize_phone(clean["phone"])
+    for key in ("name", "address", "need", "details"):
+        if clean.get(key) is not None and not isinstance(clean[key], str):
+            clean[key] = json.dumps(clean[key], ensure_ascii=False)   # never lose an address given as a list/dict
 
     return {
         "reply": str(data.get("reply") or "").strip(),
         "language": data.get("language") or "",
-        "lead": {
-            key: lead.get(key)
-            for key in (
-                "name", "phone", "need", "details", "ready_to_buy"
-            )
-        },
+        "lead": clean,
         "handoff": bool(data.get("handoff")),
     }
 

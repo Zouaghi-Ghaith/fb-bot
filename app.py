@@ -29,11 +29,11 @@ SHEETS_WEBHOOK_URL = os.getenv("SHEETS_WEBHOOK_URL", "")
 SHEETS_SECRET = os.getenv("SHEETS_SECRET", "")
 
 FALLBACK_REPLY = (
-    "Merci pour votre message ! Un conseiller va vous répondre très bientôt."
+    "Merci 3al message ! Wa7ed men l'équipe bech yjawbek f a9reb wa9t 🙏"
 )
 ATTACHMENT_REPLY = (
-    "Merci ! Pour le moment je comprends seulement les messages texte. "
-    "Pouvez-vous écrire votre demande ?"
+    "Merci ! Taw na9ra el messages el maktoubin bark. "
+    "Ektebli talabek bil ktiba min fadhlek 🙏 (Je lis seulement les messages écrits.)"
 )
 
 logging.basicConfig(
@@ -116,6 +116,7 @@ def save_lead(channel, sender, lead, language, handoff, last_message):
         "sender_id": sender,
         "name": lead.get("name") or "",
         "phone": lead.get("phone") or "",
+        "address": lead.get("address") or "",
         "need": lead.get("need") or "",
         "details": lead.get("details") or "",
         "ready_to_buy": lead.get("ready_to_buy") or "unknown",
@@ -164,6 +165,7 @@ def save_lead(channel, sender, lead, language, handoff, last_message):
 def should_save(lead, handoff):
     return (
         bool(lead.get("phone"))
+        or bool(lead.get("address"))
         or str(lead.get("ready_to_buy", "")).lower() in ("yes", "maybe")
         or handoff
     )
@@ -172,6 +174,32 @@ def should_save(lead, handoff):
 # ------------------------------------------------------------------
 # Handle incoming messages — NO PAUSE SYSTEM
 # ------------------------------------------------------------------
+
+def describe_location(msg):
+    """If the customer shared a map location (pin or maps link), return text the AI reads as a valid address."""
+    for att in msg.get("attachments") or []:
+        payload = att.get("payload") or {}
+        url = att.get("url") or payload.get("url") or ""
+        title = att.get("title") or ""
+        coords = payload.get("coordinates") or {}
+
+        if att.get("type") == "location" and coords:
+            parts = [f"{coords.get('lat')},{coords.get('long')}"]
+        elif att.get("type") == "fallback" and (
+            "maps" in url.lower() or "location" in title.lower()
+        ):
+            parts = []
+        else:
+            continue
+
+        if title:
+            parts.append(title)
+        if url:
+            parts.append(url)
+        return "[Customer shared a map location: " + " | ".join(parts) + "]"
+
+    return None
+
 
 def handle_event(event, channel):
     msg = event.get("message")
@@ -192,7 +220,12 @@ def handle_event(event, channel):
         mid = msg.get("mid")
         text = msg.get("text")
 
-        if not text and msg.get("attachments"):
+        # A shared map location counts as a valid address.
+        location_text = describe_location(msg)
+        if location_text:
+            text = f"{text}\n{location_text}" if text else location_text
+
+        elif not text and msg.get("attachments"):
             send_text(sender, ATTACHMENT_REPLY)
             return
 

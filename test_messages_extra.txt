@@ -1,0 +1,22 @@
+# Copy these lines to the end of your test_messages.txt (lines starting with # are ignored).
+# Addresses written in Darija / French / Arabic (the bot must ACCEPT them all)
+adresse: Menzel Bourguiba, 7ay el 3amel, 9odem el pharmacie
+3onwani Sousse, Khezama, janb el jem3a, bloc B etage 2 app 5
+نسكن في صفاقس، طريق تينيور كلم 3، قدام المغازة
+rue de Marseille, Lac 2, Tunis, immeuble Yasmine
+el Mourouj 3, bin Monoprix w el poste
+nsakken fi hay ettadhamen, 9rib men station el louage
+ektebli win theb nab3athlek: Hammamet, 9odem Carrefour
+# Phone formats
+numrou 22 123 456
+mon numéro: +216 98 765 432
+نمرو تاعي ٢٢١٢٣٤٥٦
+0021655123456
+# Customer writes Moroccan / Algerian words (the bot must still answer in Tunisian or French)
+bghit chi tricot, chhal taman ?
+wesh kayen livraison l Tunis ?
+# Mixed, short, messy messages
+slt chhal 7a9 el sneakers ??
+nheb 3 casquettes kahlin w 2 t-shirts byedh M
+bonsoir famma livraison ghodwa l Ariana ?
+chbik ma tjawebch
