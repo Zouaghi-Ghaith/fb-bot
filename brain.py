@@ -193,18 +193,26 @@ def _call_openai_compatible(provider, base_url, key, model,
         messages.append({"role": role, "content": item["content"]})
     messages.append({"role": "user", "content": user_text})
 
+    request_body = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.3,
+        "response_format": {"type": "json_object"},
+    }
+
+    # Groq: cap generated output to reduce token usage.
+    # This function is also used by Mistral, so apply Groq's
+    # max_completion_tokens parameter only to Groq requests.
+    if provider.lower() == "groq":
+        request_body["max_completion_tokens"] = 500
+
     result = _post_json(
         base_url,
         {
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
         },
-        {
-            "model": model,
-            "messages": messages,
-            "temperature": 0.3,
-            "response_format": {"type": "json_object"},
-        },
+        request_body,
         provider.capitalize(),
     )
 
