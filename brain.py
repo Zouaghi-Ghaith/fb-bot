@@ -1,10 +1,8 @@
-
 """
-AI brain for a Facebook/Instagram business bot.
-Supports Gemini, Mistral, and Groq.
+Compact AI brain for a Tunisian Facebook/Instagram sales bot.
+Supports Groq, Mistral and Gemini.
 Returns: reply, language, lead, handoff.
 """
-
 import json
 import os
 import re
@@ -12,64 +10,46 @@ import requests
 
 from business import BUSINESS_INFO
 
-DARIJA_GLOSSARY = """
-Tunisian Darija hints (Arabizi: 3=ع, 7=ح, 9=ق, 5=خ, 2=ء):
-- 3aslema / aslema / salem = hello
-- chnowa / chnouwa / شنوة = what
-- 9adech / 9addeh / قداش = how much
-- nheb / نحب = I want
-- nechri / نشري = I buy
-- famma / fama / فما = is there
-- mouch / mech / موش = not
-- taw / tawa / توا = now
-- ghodwa / غدوة = tomorrow
-- barcha / برشا = a lot
-- behi / باهي = good, ok
-- ghali / غالي = expensive
-- rkhis / رخيص = cheap
-- win / وين = where
-- wa9teh / وقتاش = when
-- kifech / كيفاش = how
-- yaatik essaha = thank you
-- flous / فلوس = money
-- esmi = my name is
-- numrou = phone number
-"""
+SYSTEM_PROMPT = """You are the sales assistant for a Tunisian business on Facebook/Instagram.
 
-SYSTEM_PROMPT = """You are the assistant of a small business replying to Facebook/Instagram customers.
-
-BUSINESS INFORMATION (your ONLY source of facts):
+BUSINESS FACTS (your ONLY source; never invent products, prices, stock, delivery, or policies):
 {business}
 
-LANGUAGE RULES
-- Reply in the customer's language and script: French, MSA Arabic, Tunisian Darija Arabic, Tunisian Darija Arabizi, or English.
-- For Arabizi, reply in simple Arabizi or French.
-- Be friendly, polite and concise: 1-3 sentences. Ask only ONE question at a time.
-{glossary}
+LANGUAGE — STRICT:
+- Reply ONLY in French or natural Tunisian Darija.
+- French customer -> French.
+- Tunisian Darija Arabic script -> Tunisian Darija Arabic script.
+- Tunisian Darija Arabizi -> simple Tunisian Arabizi.
+- English, MSA Arabic, or another language -> French.
+- Never use Moroccan/Algerian Darija or formal MSA Arabic.
+- Friendly, natural and concise: usually 1–2 sentences. Ask ONE question maximum.
 
-YOUR GOAL
-- Understand the customer's request.
-- Collect naturally: name, phone, product/service, details (size, color, quantity, area, date, budget), and purchase readiness.
-- When enough order details are collected, summarize the order and say the team will confirm.
+SALES BEHAVIOUR:
+- Answer the customer's question first, then guide them naturally toward choosing or ordering.
+- If they ask what is available, mention only products/services listed in BUSINESS FACTS and ask which interests them.
+- If they ask for something not listed, politely explain what the business DOES offer, using only BUSINESS FACTS, and ask whether one of those options interests them. Never pretend the requested item is available.
+- If BUSINESS FACTS do not confirm availability or price, say the team will confirm. Set handoff=true when human confirmation is needed.
+- Do not ask again for information already provided.
+- Collect naturally, one step at a time: product/service (need), preferences (size, colour, quantity, etc.), name, phone and delivery address.
+- ACCEPT addresses in any language/script: Tunisian Darija, Arabizi, Arabic, French, abbreviations, landmarks or colloquial descriptions. Save the address exactly as provided; do not reject or translate it.
+- If an address is genuinely unclear, ask one short clarification question.
+- When enough order details are collected, briefly recap and say the team will confirm.
+- ready_to_buy="yes" only if they clearly want to order now; "maybe" if interested but undecided; "no" if they decline; otherwise "unknown".
+- handoff=true if the customer complains, is angry, requests a human, or asks something not covered by BUSINESS FACTS.
+- Never request card details, passwords or verification codes.
+- Include only information the customer stated. Keep known information unless corrected. Use null for unknown values.
 
-HARD RULES
-- Never invent prices, stock, addresses, delivery times, discounts, or promises.
-- If business information does not answer the question, say the team will confirm and set handoff to true.
-- Never request card numbers, passwords, or verification codes.
-- Set handoff=true if the customer is angry, complains, requests a human, or asks something you cannot answer.
-- Stay focused on the business.
-- ready_to_buy is "yes" only if they clearly want to order/book now; "maybe" if interested; "no" if they decline; otherwise "unknown".
-- In lead, include only information the customer stated. Use null for unknown fields and retain known information unless corrected.
+KNOWN CUSTOMER INFO:
+{known}
 
-KNOWN CUSTOMER INFO: {known}
-
-Return ONLY a valid JSON object with exactly these keys:
+Return ONLY valid JSON with exactly these keys:
 {{
-  "reply": "message to customer",
-  "language": "fr" | "ar" | "darija_ar" | "darija_latin" | "en",
+  "reply": "short customer-facing reply",
+  "language": "fr" | "darija_ar" | "darija_latin",
   "lead": {{
     "name": null,
     "phone": null,
+    "address": null,
     "need": null,
     "details": null,
     "ready_to_buy": "unknown"
@@ -78,10 +58,12 @@ Return ONLY a valid JSON object with exactly these keys:
 }}
 """
 
+LEAD_KEYS = ("name", "phone", "address", "need", "details", "ready_to_buy")
+
+
 def build_prompt(known_lead):
     return SYSTEM_PROMPT.format(
         business=BUSINESS_INFO.strip(),
-        glossary=DARIJA_GLOSSARY,
         known=json.dumps(known_lead or {}, ensure_ascii=False),
     )
 
@@ -96,121 +78,88 @@ def _extract_json(text):
         if match:
             return json.loads(match.group(0))
         raise RuntimeError("AI returned invalid JSON.")
+
+
 def save_lead(lead):
     url = os.getenv("SHEETS_WEBHOOK_URL", "").strip()
     secret = os.getenv("SHEETS_SECRET", "").strip()
-
     if not url:
         print("ERROR: SHEETS_WEBHOOK_URL is missing")
         return
-
     payload = {
-        "secret": secret,
-        "channel": "terminal_test",
-        "sender_id": "TEST_CHAT",
-        "name": lead.get("name"),
-        "phone": lead.get("phone"),
-        "need": lead.get("need"),
+        "secret": secret, "channel": "terminal_test", "sender_id": "TEST_CHAT",
+        "name": lead.get("name"), "phone": lead.get("phone"),
+        "address": lead.get("address"), "need": lead.get("need"),
         "details": lead.get("details"),
         "ready_to_buy": lead.get("ready_to_buy", "unknown"),
-        "language": "unknown",
-        "needs_human": False,
+        "language": "unknown", "needs_human": False,
         "last_message": "Terminal chat test",
     }
-
     try:
         response = requests.post(url, json=payload, timeout=40)
         print("SHEETS:", response.status_code, response.text[:200])
         response.raise_for_status()
-    except requests.RequestException as e:
-        print("ERROR saving lead:", e)
+    except requests.RequestException as exc:
+        print("ERROR saving lead:", exc)
 
 
 def _post_json(url, headers, body, provider, timeout=60):
     try:
-        response = requests.post(
-            url, headers=headers, json=body, timeout=(10, timeout)
-        )
+        response = requests.post(url, headers=headers, json=body, timeout=(10, timeout))
     except requests.exceptions.Timeout as exc:
         raise RuntimeError(f"{provider} request timed out.") from exc
     except requests.exceptions.RequestException as exc:
         raise RuntimeError(f"{provider} connection failed: {exc}") from exc
-
     if not response.ok:
-        raise RuntimeError(
-            f"{provider} HTTP {response.status_code}: {response.text[:1000]}"
-        )
+        raise RuntimeError(f"{provider} HTTP {response.status_code}: {response.text[:1000]}")
     return response.json()
 
 
 def _call_gemini(system_prompt, history, user_text):
-    key = os.getenv("GEMINI_API_KEY")
+    key = os.getenv("GEMINI_API_KEY", "").strip()
     if not key:
         raise RuntimeError("GEMINI_API_KEY is missing")
-
-    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
     contents = [
-        {
-            "role": "user" if item["role"] == "user" else "model",
-            "parts": [{"text": item["content"]}],
-        }
+        {"role": "model" if item.get("role") == "assistant" else "user",
+         "parts": [{"text": str(item.get("content", ""))}]}
         for item in history
     ]
     contents.append({"role": "user", "parts": [{"text": user_text}]})
-
     body = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": contents,
         "generationConfig": {
-            "temperature": 0.3,
+            "temperature": 0.2, "maxOutputTokens": 450,
             "responseMimeType": "application/json",
         },
     }
-
     result = _post_json(
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-        {
-            "x-goog-api-key": key,
-            "Content-Type": "application/json",
-        },
-        body,
-        "Gemini",
+        {"x-goog-api-key": key, "Content-Type": "application/json"},
+        body, "Gemini",
     )
-
     try:
         return result["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError, TypeError):
-        raise RuntimeError(
-            "Gemini returned no usable text. Check its response and quota."
-        )
+        raise RuntimeError("Gemini returned no usable text. Check model, quota, and response.")
 
 
-def _call_openai_compatible(provider, base_url, key, model,
-                            system_prompt, history, user_text):
+def _call_openai_compatible(provider, base_url, key, model, system_prompt, history, user_text):
     if not key:
         raise RuntimeError(f"{provider.upper()}_API_KEY is missing")
-
     messages = [{"role": "system", "content": system_prompt}]
     for item in history:
         role = "assistant" if item.get("role") == "assistant" else "user"
-        messages.append({"role": role, "content": item["content"]})
+        messages.append({"role": role, "content": str(item.get("content", ""))})
     messages.append({"role": "user", "content": user_text})
-
     result = _post_json(
         base_url,
-        {
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-        },
-        {
-            "model": model,
-            "messages": messages,
-            "temperature": 0.3,
-            "response_format": {"type": "json_object"},
-        },
+        {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        {"model": model, "messages": messages, "temperature": 0.2,
+         "response_format": {"type": "json_object"}},
         provider.capitalize(),
     )
-
     try:
         return result["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError):
@@ -219,29 +168,25 @@ def _call_openai_compatible(provider, base_url, key, model,
 
 def _call_mistral(system_prompt, history, user_text):
     return _call_openai_compatible(
-        "mistral",
-        "https://api.mistral.ai/v1/chat/completions",
-        os.getenv("MISTRAL_API_KEY"),
-        os.getenv("MISTRAL_MODEL", "mistral-small-latest"),
+        "mistral", "https://api.mistral.ai/v1/chat/completions",
+        os.getenv("MISTRAL_API_KEY"), os.getenv("MISTRAL_MODEL", "mistral-small-latest"),
         system_prompt, history, user_text,
     )
 
 
 def _call_groq(system_prompt, history, user_text):
     return _call_openai_compatible(
-        "groq",
-        "https://api.groq.com/openai/v1/chat/completions",
-        os.getenv("GROQ_API_KEY"),
-        os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
+        "groq", "https://api.groq.com/openai/v1/chat/completions",
+        os.getenv("GROQ_API_KEY"), os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
         system_prompt, history, user_text,
     )
 
 
 def ask_ai(history, user_text, known_lead=None):
-    """Return reply, language, lead and handoff."""
+    """Return reply, language, lead, handoff and provider."""
+    history = (history or [])[-4:]  # Last two exchanges only; keeps token use low.
     prompt = build_prompt(known_lead)
-    provider = os.getenv("AI_PROVIDER", "gemini").strip().lower()
-
+    provider = os.getenv("AI_PROVIDER", "groq").strip().lower()
     if provider == "groq":
         raw = _call_groq(prompt, history, user_text)
     elif provider == "mistral":
@@ -249,23 +194,21 @@ def ask_ai(history, user_text, known_lead=None):
     elif provider == "gemini":
         raw = _call_gemini(prompt, history, user_text)
     else:
-        raise RuntimeError(
-            f"Unsupported AI_PROVIDER '{provider}'. Use gemini, groq, or mistral."
-        )
+        raise RuntimeError(f"Unsupported AI_PROVIDER '{provider}'. Use gemini, groq, or mistral.")
 
     data = _extract_json(raw)
     lead = data.get("lead") or {}
-
+    clean_lead = {key: lead.get(key) for key in LEAD_KEYS}
+    # Preserve previously collected values if the model omits them.
+    for key in LEAD_KEYS:
+        if clean_lead[key] in (None, "", "null") and (known_lead or {}).get(key) not in (None, "", "null"):
+            clean_lead[key] = known_lead[key]
     return {
         "reply": str(data.get("reply") or "").strip(),
-        "language": data.get("language") or "",
-        "lead": {
-            key: lead.get(key)
-            for key in (
-                "name", "phone", "need", "details", "ready_to_buy"
-            )
-        },
+        "language": data.get("language") or "fr",
+        "lead": clean_lead,
         "handoff": bool(data.get("handoff")),
+        "provider": provider,
     }
 
 
